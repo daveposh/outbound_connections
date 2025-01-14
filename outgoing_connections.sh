@@ -2,9 +2,9 @@
 
 # Function to show usage
 show_usage() {
-    echo "Usage: $0 <seconds> <ip_address>"
+    echo "Usage: $0 <seconds> <local_ip>"
     echo "Example: $0 20 172.31.24.10"
-    echo -e "\nAvailable network interfaces and IPs:"
+    echo -e "\nAvailable local IPs:"
     ip -4 addr show | grep -w inet | awk '{print $2}' | cut -d/ -f1
 }
 
@@ -43,7 +43,7 @@ if ! ip addr | grep -q "$LOCAL_IP"; then
     fi
 fi
 
-echo "Collecting network connections over $COLLECTION_TIME seconds for IP $LOCAL_IP..."
+echo "Collecting outgoing established connections from $LOCAL_IP over $COLLECTION_TIME seconds..."
 
 # Create a temporary file to store connections
 TEMP_FILE=$(mktemp)
@@ -56,28 +56,41 @@ for ((i=1; i<=$COLLECTION_TIME; i++)); do
     PERCENT=$((i * 100 / COLLECTION_TIME))
     echo -ne "Progress: $PERCENT% ($i/$COLLECTION_TIME seconds)\r"
     
-    # Collect current connections and append to temp file
-    ss -ntua | 
+    # Debug: Show all current connections first
+    echo -e "\nDebug: Current ss output at second $i:" >> "$TEMP_FILE"
+    ss -ntu state established >> "$TEMP_FILE"
+    
+    # Collect current established outgoing connections for specific IP
+    echo "Filtered connections:" >> "$TEMP_FILE"
+    ss -ntu state established | 
         grep -v "Netid" |
-        grep -v "127.0.0" |
+        grep -v "127\.0\.0\.1" |
         grep -v "::1" |
         awk -v ip="$LOCAL_IP" '
-            {
-                if ($4 ~ ip || $5 ~ ip) 
-                    printf "State: %-12s Local: %-25s Remote: %-25s\n", $2, $4, $5
-            }' >> "$TEMP_FILE"
+        $4 ~ ip {
+            printf "Local: %-25s Remote: %s\n", $4, $5
+        }' >> "$TEMP_FILE"
     
+    echo "---" >> "$TEMP_FILE"
     sleep 1
 done
 echo -e "\nCollection complete!\n"
 
-# Show unique connections found during the collection period
-echo "Unique connections found over $COLLECTION_TIME seconds for IP $LOCAL_IP:"
-echo "----------------------------------------"
-sort -u "$TEMP_FILE"
+# Show the debug output
+echo "Debug output:"
+cat "$TEMP_FILE"
 
-# Show listening ports separately
-echo -e "\n-------------------"
-echo "Current listening ports:"
-echo "-------------------"
-ss -ntul | grep -v "Netid" | grep LISTEN
+echo -e "\nFiltered unique remote peer connections from $LOCAL_IP:"
+echo "----------------------------------------"
+ss -ntu state established | 
+    grep -v "Netid" |
+    grep -v "127\.0\.0\.1" |
+    grep -v "::1" |
+    awk -v ip="$LOCAL_IP" '
+    $4 ~ ip {
+        print $5
+    }' | sort -u
+
+# Show current connection count
+echo -e "\nCurrent active connections for reference:"
+ss -ntu state established
